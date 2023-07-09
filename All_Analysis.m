@@ -16,71 +16,53 @@ cort_phi_e = cort_phi_e(t_burn:end,:,:); % Remove burn-in
 
 % --- Haemodynamic Modeling
 
+params = [];
+N = 400;
+t_burn = 4000;
+
 TR = 0.586;
+dt = 0.005;
+
 fNY=1/(2*dt);
 [Bfilt,Afilt] = butter(3,0.1/fNY,'low');
 
-[hrf,~] = spm_hrf(TR);
 bold_ts = [];
 
-for pp =1: size(cort_phi_e,3)
-    for rr = 1: size(cort_phi_e,2)
-        x = zscore(cort_phi_e(:,rr,pp));
-        conv_ts = conv(hrf,x);
-        xx = conv_ts(1:end-length(hrf)+1,1);
-        bold_ts(:,rr,pp) = xx;
-    end
+for pp = 1: size(cort_phi_e,3)
+
+    xx = model_BOLD_balloon(cort_phi_e(:,:,pp)).';
+    x = xx(t_burn:end,:); % Remove burn-in
+
+    % Save BOLD data
+    bold_ts(:,:,pp) = x;
+
 end
 
+cort_phi_e = cort_phi_e(1500:end,:,:);
 
-%% HRF Correlations
-[hrf,~] = spm_hrf(0.586);
+%% Firing Rates
 
-J1 = corr(bold_ts(:,:,1));
-J2 = corr(bold_ts(:,:,2));
-J3 = corr(bold_ts(:,:,3));
-J4 = corr(bold_ts(:,:,4));
+set(0,'defaultTextInterpreter','latex')
+set(0, 'defaultAxesTickLabelInterpreter','latex');
+set(0, 'defaultLegendInterpreter','latex');
 
-J1(logical(eye(400))) = 0;
-J2(logical(eye(400))) = 0;
-J3(logical(eye(400))) = 0;
-J4(logical(eye(400))) = 0;
-
-max_corr = max([max(J1,[],'all'),max(J2,[],'all'),max(J3,[],'all'),max(J4,[],'all')]);
-min_corr = min([min(J1,[],'all'),min(J2,[],'all'),min(J3,[],'all'),min(J4,[],'all')]);
+Q = squeeze(mean(mean(cort_phi_e,1),2));
+std_Q = squeeze(std(mean(cort_phi_e,1),[],2));
 
 figure
-subplot(141)
-imagesc(J1)
-caxis([min_corr max_corr])
-xticks = [];
-yticks = [];
+boxplot([squeeze(mean(cort_phi_e(:,:,1),1)).',squeeze(mean(cort_phi_e(:,:,2),1)).',squeeze(mean(cort_phi_e(:,:,3),1)).',squeeze(mean(cort_phi_e(:,:,4),1)).'],'Labels',{'Wake','Prop','High Matrix','Low Matrix'})
+ylabel('Mean Firing Rate, [Hz]')
+set(gca,'Fontsize',15)
 
-subplot(142)
-figure
-imagesc(J2)
-caxis([min_corr max_corr])
-xticks = [];
-yticks = [];
+set(0,'defaultTextInterpreter','latex')
+set(0, 'defaultAxesTickLabelInterpreter','latex');
+set(0, 'defaultLegendInterpreter','latex');
 
-subplot(143)
-figure
-imagesc(J3)
-caxis([min_corr max_corr])
-xticks = [];
-yticks = [];
-
-subplot(144)
-figure
-imagesc(J4)
-caxis([min_corr max_corr])
-xticks = [];
-yticks = [];
 
 %% MSD Landscape
 
-ndt = 100; % Number of lags
-ds = 0:1:20; % Number of MSD divisions
+ndt = 500; % Number of lags
+ds = 0:0.5:20; % Number of MSD divisions
 
 nrgSig = nan(ndt,numel(ds));
 nrgBase = nan(ndt,numel(ds));
@@ -518,15 +500,6 @@ for pp = 1: size(cort_phi_e,3)
     fC(logical(eye(N))) = 0;
     
 
-    % -------------------- Regional diversity  --------------
-    % Grab the upper triangle of the regional FC
-    up_idx  = ones(size(fC));
-    up_idx = triu(up_idx,1);
-    state_region = fC(logical(up_idx));
-    
-    % Standard deviation of the regional FC
-    reg_div(pp) = std(state_region(:));
-
     % -------------------- Susceptibility  --------------
     data = cort_phi_e(:,:,pp);
     [Z,~,~] = zscore(data,0,1);
@@ -555,21 +528,8 @@ for pp = 1: size(cort_phi_e,3)
     fitvalues = coeffvalues(f0);
     time_sc(pp) = fitvalues(3); % save c parameter
 
-    % -------------------- BOLD Timescale  --------------
-    acf = [];
-    for rr = 1: N
-        [acf(:,rr),lags] = autocorr(zscore(bold_ts(:,rr,pp)));
-    end
-    avg_acf(:,pp) = mean(acf,2);
-    grad_acf = gradient(avg_acf(:,pp));
-    x_max = find(grad_acf >= 0,1,'first');
-
-    x = lags(1:x_max);
-    y = avg_acf(1:x_max,pp);
-    g = fittype('a-b*exp(-c*x)');
-    f0 = fit(x,y,g,'StartPoint',[[ones(size(x)), -exp(-x)]\y; 1]);
-    fitvalues = coeffvalues(f0);
-    bold_time_sc(pp) = fitvalues(3); % save c parameter
+    % -------------------- Dimensionality  --------------
+    [~,~,~,~,exp_var(:,pp)] = pca(cort_phi_e(:,:,pp));
 
 
     % -------------------- Metastability  --------------
@@ -659,53 +619,35 @@ end
 
 
 % Spider-Plot
-X = [reg_div.*1e3; sus.*1e3; part_coeff_17; time_sc; 1./bold_time_sc; m_stab.*1e3; kc; alpha_lip_fef_coh];
+X = [exp_var(1,:); sus.*1e3; part_coeff_17; time_sc; m_stab.*1e3; kc; alpha_lip_fef_coh];
 X1 = X(:,1:2);
 X2 = X(:,3:4);
 tick_data = {'','','',''};
 figure
-spider_plot(X.','AxesLabels', {'FC Variance [$10^{-3}$]', 'Susceptibility [$10^{-3}$]', 'Network Participation', 'Time Scale','BOLD Time Scale','Synchronization Variance [$10^{-3}$]','Kolmogorov Complexity','8-13Hz LIP-FEF Coherence'},'AxesInterpreter','latex','FillOption', 'on')
+spider_plot(X.','AxesLabels', {'Explained Variance', 'Susceptibility [$10^{-3}$]', 'Network Participation', 'Time Scale','Synchronization Variance [$10^{-3}$]','Kolmogorov Complexity','8-13Hz LIP-FEF Coherence'},'AxesInterpreter','latex','FillOption', 'on')
 legend('Wake','Propofol','High Matrix','Low Matrix')
-
-
-lims = [50, 5, 0.91, 0.6, 0.085, 10, 0.94, 0.4; 70, 11, 0.93, 1.4, 0.12, 18, 0.99, 1.3];
-ax_prec = [2,2,2,2,2,2,2,2];
-
-figure
-spider_plot(X.','AxesLabels', {'FC Variance [$10^{-3}$]', 'Susceptibility [$10^{-3}$]', 'Network Participation', 'Time Scale','BOLD Time Scale','Synchronization Variance [$10^{-3}$]','Kolmogorov Complexity','8-13Hz LIP-FEF Coherence'},'AxesLimits', lims,'AxesPrecision', ax_prec,...
-    'AxesInterpreter','latex','FillOption', 'on','AxesTickLabels',tick_data);
-
-legend('Wake','Propofol','High Matrix','Low Matrix')
-%legend('High Matrix','Low Matrix')
 
 
 %% Transfer Entropy - Gaussian Estimator
 clc
 % Change location of jar to match yours:
-javaaddpath('infoDynamics.jar');
+javaaddpath('/Users/elimuller/Library/CloudStorage/OneDrive-TheUniversityofSydney(Staff)/MATLAB/Information_Dynamics/infoDynamics.jar');
 clear teCalc
 
-
-% ---- BOLD-transformed Time series
-data = [];
-for pp =1: 4
-    for rr = 1: 400
-        data(:,rr,pp) = downsample(bold_ts(:,rr,pp),0.01/dt);
-    end
-end
-
+data = cort_phi_e; % Raw Time series
 
 xx_ids = [1:400];
 yy_ids = [1:400];
 
-% ----------- Set ACF Timescale
-acf = [];
-for rr = 1: N
-    [acf(:,rr),lags] = autocorr(data(:,rr,pp));
-end
-avg_acf(:,pp) = mean(acf,2);
-grad_acf = gradient(avg_acf(:,pp));
-x_max = find(grad_acf >= 0,1,'first');
+% ----------- Get ACF Timescale
+% acf = [];
+% for rr = 1: N
+%     [acf(:,rr),lags] = autocorr(data(:,rr,pp),1000);
+% end
+% avg_acf = mean(acf,2);
+% grad_acf = gradient(avg_acf);
+% x_max = find(grad_acf >= 0,1,'first');
+x_max = 5; % Hard-coded
 
 
 % ------------------------------------------
@@ -749,9 +691,10 @@ for mm = 1: 4
     end
 end
 
+
 %% Active Information Storage - Gaussian Estimator
 clc
-javaaddpath('infoDynamics.jar');
+javaaddpath('/Users/elimuller/Library/CloudStorage/OneDrive-TheUniversityofSydney(Staff)/MATLAB/Information_Dynamics/infoDynamics.jar');
 
 xx_ids = [1:400];
 yy_ids = [1:400];
@@ -778,6 +721,8 @@ for mm = 1: 4
         disp(xx)
     end
 end
+
+
 
 %% Plot TE and AIS
 nbins = 20;
